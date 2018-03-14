@@ -117,14 +117,19 @@ public final class Util {
 		return region;
 	}
 
-	protected static boolean isNewMergedRegion(CellRangeAddress region, Collection mergedRegions) {
-		for (Iterator iterator = mergedRegions.iterator(); iterator.hasNext();) {
-			CellRangeAddress cellRangeAddress = (CellRangeAddress) iterator.next();
-			if (areRegionsEqual(cellRangeAddress, region)) {
-				return false;
-			}
-		}
-		return true;
+	protected static boolean isNewMergedRegion(CellRangeAddress region, SortedMergedRegions allMergedRegions) {
+		CellRangeAddress element = allMergedRegions.binarySearch(new MergedRegionElement(region));
+		return element == null;
+
+		// for (Iterator iterator = mergedRegions.iterator();
+		// iterator.hasNext();) {
+		// CellRangeAddress cellRangeAddress = (CellRangeAddress)
+		// iterator.next();
+		// if (areRegionsEqual(cellRangeAddress, region)) {
+		// return false;
+		// }
+		// }
+		// return true;
 	}
 
 	public static CellRangeAddress getMergedRegion(Sheet sheet, int rowNum, int cellNum) {
@@ -254,7 +259,9 @@ public final class Util {
 		int from = rowCollection.getParentRow().getPoiRow().getRowNum();
 		int num = rowCollection.getDependentRowNumber() + 1;
 		int to = from + num;
-		Set mergedRegions = new HashSet();
+		SortedMergedRegions allMergedRegions = new SortedMergedRegions();
+		Map<Cell, CellRangeAddress> cachedRegion = new HashMap<Cell, CellRangeAddress>();
+
 		for (int i = from; i < to; i++) {
 			org.apache.poi.ss.usermodel.Row srcRow = sheet.getRow(i);
 			org.apache.poi.ss.usermodel.Row destRow = sheet.getRow(to + i - from);
@@ -270,13 +277,22 @@ public final class Util {
 					if (srcCell != null) {
 						org.apache.poi.ss.usermodel.Cell destCell = destRow.createCell(j);
 						copyCell(srcCell, destCell, true);
-						CellRangeAddress mergedRegion = getMergedRegion(sheet, i, j);
+
+						CellRangeAddress mergedRegion = null;
+						if (cachedRegion.get(srcCell) == null) {
+							mergedRegion = getMergedRegion(sheet, i, j);
+							cachedRegion.put(srcCell, mergedRegion);
+						}
+
 						if (mergedRegion != null) {
-							CellRangeAddress newMergedRegion = new CellRangeAddress(
-									to - from + mergedRegion.getFirstRow(), to - from + mergedRegion.getLastRow(),
-									mergedRegion.getFirstColumn(), mergedRegion.getLastColumn());
-							if (isNewMergedRegion(newMergedRegion, mergedRegions)) {
-								mergedRegions.add(newMergedRegion);
+							if (srcRow.getRowNum() == mergedRegion.getLastRow()
+									&& srcCell.getColumnIndex() == mergedRegion.getLastColumn()) {
+								CellRangeAddress newMergedRegion = new CellRangeAddress(
+										to - from + mergedRegion.getFirstRow(), to - from + mergedRegion.getLastRow(),
+										mergedRegion.getFirstColumn(), mergedRegion.getLastColumn());
+								if (isNewMergedRegion(newMergedRegion, allMergedRegions)) {
+									allMergedRegions.add(new MergedRegionElement(newMergedRegion));
+								}
 							}
 						}
 					}
@@ -284,9 +300,9 @@ public final class Util {
 			}
 		}
 		// set merged regions
-		for (Iterator iterator = mergedRegions.iterator(); iterator.hasNext();) {
-			CellRangeAddress region = (CellRangeAddress) iterator.next();
-			sheet.addMergedRegion(region);
+		for (Iterator iterator = allMergedRegions.getRegions().iterator(); iterator.hasNext();) {
+			MergedRegionElement region = (MergedRegionElement) iterator.next();
+			sheet.addMergedRegion(region.getRegion());
 		}
 	}
 
@@ -307,12 +323,12 @@ public final class Util {
 	private static void shiftColumnUp(net.sf.jxls.parser.Cell cell, int startRow, int shiftNumber) {
 		Sheet sheet = cell.getRow().getSheet().getPoiSheet();
 		int cellNum = cell.getPoiCell().getColumnIndex();
-		List hssfMergedRegions = new ArrayList();
+		SortedMergedRegions allMergedRegions = new SortedMergedRegions();
 		// find all merged regions in this area
 		for (int i = startRow, c = sheet.getLastRowNum(); i <= c; i++) {
 			CellRangeAddress region = getMergedRegion(sheet, i, cellNum);
-			if (region != null && isNewMergedRegion(region, hssfMergedRegions)) {
-				hssfMergedRegions.add(region);
+			if (region != null && isNewMergedRegion(region, allMergedRegions)) {
+				allMergedRegions.add(new MergedRegionElement(region));
 			}
 		}
 		// move all related cells up
@@ -326,12 +342,12 @@ public final class Util {
 			}
 		}
 		// remove previously shifted merged regions in this area
-		for (Iterator iterator = hssfMergedRegions.iterator(); iterator.hasNext();) {
-			removeMergedRegion(sheet, (CellRangeAddress) iterator.next());
+		for (Iterator iterator = allMergedRegions.getRegions().iterator(); iterator.hasNext();) {
+			removeMergedRegion(sheet, ((MergedRegionElement) iterator.next()).getRegion());
 		}
 		// set merged regions for shifted cells
-		for (Iterator iterator = hssfMergedRegions.iterator(); iterator.hasNext();) {
-			CellRangeAddress region = (CellRangeAddress) iterator.next();
+		for (Iterator iterator = allMergedRegions.getRegions().iterator(); iterator.hasNext();) {
+			CellRangeAddress region = ((MergedRegionElement) iterator.next()).getRegion();
 			CellRangeAddress newRegion = new CellRangeAddress(region.getFirstRow() - shiftNumber,
 					region.getLastRow() - shiftNumber, region.getFirstColumn(), region.getLastColumn());
 			sheet.addMergedRegion(newRegion);
@@ -376,8 +392,9 @@ public final class Util {
 
 	private static void duplicateStyle(RowCollection rowCollection, int rowToCopy, int startRow, int num) {
 		Sheet sheet = rowCollection.getParentRow().getSheet().getPoiSheet();
-		Set mergedRegions = new HashSet();
+		SortedMergedRegions allMergedRegions = new SortedMergedRegions();
 		org.apache.poi.ss.usermodel.Row srcRow = sheet.getRow(rowToCopy);
+		Map<Cell, CellRangeAddress> cachedRegion = new HashMap<Cell, CellRangeAddress>();
 		for (int i = startRow; i < startRow + num; i++) {
 			org.apache.poi.ss.usermodel.Row destRow = sheet.getRow(i);
 			if (destRow == null) {
@@ -392,13 +409,19 @@ public final class Util {
 				if (hssfCell != null) {
 					org.apache.poi.ss.usermodel.Cell newCell = destRow.createCell(hssfCell.getColumnIndex());
 					copyCell(hssfCell, newCell, true);
-					CellRangeAddress mergedRegion = getMergedRegion(sheet, rowToCopy, hssfCell.getColumnIndex());
+
+					CellRangeAddress mergedRegion = null;
+					if (cachedRegion.get(hssfCell) == null) {
+						mergedRegion = getMergedRegion(sheet, rowToCopy, hssfCell.getColumnIndex());
+						cachedRegion.put(hssfCell, mergedRegion);
+					}
+
 					if (mergedRegion != null) {
 						CellRangeAddress newMergedRegion = new CellRangeAddress(i,
 								i + mergedRegion.getLastRow() - mergedRegion.getFirstRow(),
 								mergedRegion.getFirstColumn(), mergedRegion.getLastColumn());
-						if (isNewMergedRegion(newMergedRegion, mergedRegions)) {
-							mergedRegions.add(newMergedRegion);
+						if (isNewMergedRegion(newMergedRegion, allMergedRegions)) {
+							allMergedRegions.add(new MergedRegionElement(newMergedRegion));
 							sheet.addMergedRegion(newMergedRegion);
 						}
 					}
@@ -408,11 +431,11 @@ public final class Util {
 	}
 
 	public static void copyRow(Sheet sheet, org.apache.poi.ss.usermodel.Row oldRow,
-			org.apache.poi.ss.usermodel.Row newRow) {
-		Set mergedRegions = new HashSet();
+			org.apache.poi.ss.usermodel.Row newRow, SortedMergedRegions allMergedRegions) {
 		if (oldRow.getHeight() >= 0) {
 			newRow.setHeight(oldRow.getHeight());
 		}
+		Map<Cell, CellRangeAddress> cachedRegion = new HashMap<Cell, CellRangeAddress>();
 		if (oldRow.getFirstCellNum() >= 0 && oldRow.getLastCellNum() >= 0) {
 			for (int j = oldRow.getFirstCellNum(), c = oldRow.getLastCellNum(); j <= c; j++) {
 				org.apache.poi.ss.usermodel.Cell oldCell = oldRow.getCell(j);
@@ -422,16 +445,19 @@ public final class Util {
 						newCell = newRow.createCell(j);
 					}
 					copyCell(oldCell, newCell, true);
-					CellRangeAddress mergedRegion = getMergedRegion(sheet, oldRow.getRowNum(),
-							oldCell.getColumnIndex());
+					CellRangeAddress mergedRegion = null;
+					if (cachedRegion.get(oldCell) == null) {
+						mergedRegion = getMergedRegion(sheet, oldRow.getRowNum(), oldCell.getColumnIndex());
+						cachedRegion.put(oldCell, mergedRegion);
+					}
 					if (mergedRegion != null) {
 						if (oldRow.getRowNum() == mergedRegion.getLastRow()
 								&& oldCell.getColumnIndex() == mergedRegion.getLastColumn()) {
 							CellRangeAddress newMergedRegion = new CellRangeAddress(newRow.getRowNum(),
 									newRow.getRowNum() + mergedRegion.getLastRow() - mergedRegion.getFirstRow(),
 									mergedRegion.getFirstColumn(), mergedRegion.getLastColumn());
-							if (isNewMergedRegion(newMergedRegion, mergedRegions)) {
-								mergedRegions.add(newMergedRegion);
+							if (isNewMergedRegion(newMergedRegion, allMergedRegions)) {
+								allMergedRegions.add(new MergedRegionElement(newMergedRegion));
 								sheet.addMergedRegion(newMergedRegion);
 							}
 						}
@@ -443,10 +469,11 @@ public final class Util {
 
 	public static void copyRow(Sheet srcSheet, Sheet destSheet, org.apache.poi.ss.usermodel.Row srcRow,
 			org.apache.poi.ss.usermodel.Row destRow) {
-		Set mergedRegions = new TreeSet();
+		SortedMergedRegions allMergedRegions = new SortedMergedRegions();
 		if (srcRow.getHeight() >= 0) {
 			destRow.setHeight(srcRow.getHeight());
 		}
+		Map<Cell, CellRangeAddress> cachedRegion = new HashMap<Cell, CellRangeAddress>();
 		if (srcRow.getFirstCellNum() >= 0 && srcRow.getLastCellNum() >= 0) {
 			for (int j = srcRow.getFirstCellNum(), c = srcRow.getLastCellNum(); j <= c; j++) {
 				org.apache.poi.ss.usermodel.Cell oldCell = srcRow.getCell(j);
@@ -456,20 +483,30 @@ public final class Util {
 						newCell = destRow.createCell(j);
 					}
 					copyCell(oldCell, newCell, true);
-					CellRangeAddress mergedRegion = getMergedRegion(srcSheet, srcRow.getRowNum(),
-							oldCell.getColumnIndex());
+
+					CellRangeAddress mergedRegion = null;
+					if (cachedRegion.get(oldCell) == null) {
+						mergedRegion = getMergedRegion(srcSheet, srcRow.getRowNum(), oldCell.getColumnIndex());
+						cachedRegion.put(oldCell, mergedRegion);
+					}
+
 					if (mergedRegion != null) {
-						// Region newMergedRegion = new Region(
-						// destRow.getRowNum(),
-						// mergedRegion.getColumnFrom(),
-						// destRow.getRowNum() + mergedRegion.getRowTo() -
-						// mergedRegion.getRowFrom(), mergedRegion.getColumnTo()
-						// );
-						CellRangeAddress newMergedRegion = new CellRangeAddress(mergedRegion.getFirstRow(),
-								mergedRegion.getLastRow(), mergedRegion.getFirstColumn(), mergedRegion.getLastColumn());
-						if (isNewMergedRegion(newMergedRegion, mergedRegions)) {
-							mergedRegions.add(newMergedRegion);
-							destSheet.addMergedRegion(newMergedRegion);
+						if (srcRow.getRowNum() == mergedRegion.getLastRow()
+								&& oldCell.getColumnIndex() == mergedRegion.getLastColumn()) {
+							// Region newMergedRegion = new Region(
+							// destRow.getRowNum(),
+							// mergedRegion.getColumnFrom(),
+							// destRow.getRowNum() + mergedRegion.getRowTo() -
+							// mergedRegion.getRowFrom(),
+							// mergedRegion.getColumnTo()
+							// );
+							CellRangeAddress newMergedRegion = new CellRangeAddress(mergedRegion.getFirstRow(),
+									mergedRegion.getLastRow(), mergedRegion.getFirstColumn(),
+									mergedRegion.getLastColumn());
+							if (isNewMergedRegion(newMergedRegion, allMergedRegions)) {
+								allMergedRegions.add(new MergedRegionElement(newMergedRegion));
+								destSheet.addMergedRegion(newMergedRegion);
+							}
 						}
 					}
 				}
@@ -479,10 +516,11 @@ public final class Util {
 
 	public static void copyRow(Sheet srcSheet, Sheet destSheet, org.apache.poi.ss.usermodel.Row srcRow,
 			org.apache.poi.ss.usermodel.Row destRow, String expressionToReplace, String expressionReplacement) {
-		Set mergedRegions = new HashSet();
+		SortedMergedRegions allMergedRegions = new SortedMergedRegions();
 		if (srcRow.getHeight() >= 0) {
 			destRow.setHeight(srcRow.getHeight());
 		}
+		Map<Cell, CellRangeAddress> cachedRegion = new HashMap<Cell, CellRangeAddress>();
 		if (srcRow.getFirstCellNum() >= 0 && srcRow.getLastCellNum() >= 0) {
 			for (int j = srcRow.getFirstCellNum(), c = srcRow.getLastCellNum(); j <= c; j++) {
 				org.apache.poi.ss.usermodel.Cell oldCell = srcRow.getCell(j);
@@ -492,20 +530,23 @@ public final class Util {
 						newCell = destRow.createCell(j);
 					}
 					copyCell(oldCell, newCell, true, expressionToReplace, expressionReplacement);
-					CellRangeAddress mergedRegion = getMergedRegion(srcSheet, srcRow.getRowNum(),
-							oldCell.getColumnIndex());
+
+					CellRangeAddress mergedRegion = null;
+					if (cachedRegion.get(oldCell) == null) {
+						mergedRegion = getMergedRegion(srcSheet, srcRow.getRowNum(), oldCell.getColumnIndex());
+						cachedRegion.put(oldCell, mergedRegion);
+					}
 					if (mergedRegion != null) {
-						// Region newMergedRegion = new Region(
-						// destRow.getRowNum(),
-						// mergedRegion.getColumnFrom(),
-						// destRow.getRowNum() + mergedRegion.getRowTo() -
-						// mergedRegion.getRowFrom(), mergedRegion.getColumnTo()
-						// );
-						CellRangeAddress newMergedRegion = new CellRangeAddress(mergedRegion.getFirstRow(),
-								mergedRegion.getLastRow(), mergedRegion.getFirstColumn(), mergedRegion.getLastColumn());
-						if (isNewMergedRegion(newMergedRegion, mergedRegions)) {
-							mergedRegions.add(newMergedRegion);
-							destSheet.addMergedRegion(newMergedRegion);
+						if (srcRow.getRowNum() == mergedRegion.getLastRow()
+								&& oldCell.getColumnIndex() == mergedRegion.getLastColumn()) {
+
+							CellRangeAddress newMergedRegion = new CellRangeAddress(mergedRegion.getFirstRow(),
+									mergedRegion.getLastRow(), mergedRegion.getFirstColumn(),
+									mergedRegion.getLastColumn());
+							if (isNewMergedRegion(newMergedRegion, allMergedRegions)) {
+								allMergedRegions.add(new MergedRegionElement(newMergedRegion));
+								destSheet.addMergedRegion(newMergedRegion);
+							}
 						}
 					}
 				}
@@ -804,15 +845,15 @@ public final class Util {
 		return (String) xmlEntities.get(Integer.toString(ch));
 	}
 
-	protected static void updateMergedRegionInRow(Sheet sheet, Set mergedRegions, int rowNum, int cellNum,
-			int destCellNum, boolean removeSourceMergedRegion) {
+	protected static void updateMergedRegionInRow(Sheet sheet, SortedMergedRegions allMergedRegions, int rowNum,
+			int cellNum, int destCellNum, boolean removeSourceMergedRegion) {
 		CellRangeAddress mergedRegion = Util.getMergedRegion(sheet, rowNum, cellNum);
-		if (mergedRegion != null && Util.isNewMergedRegion(mergedRegion, mergedRegions)) {
+		if (mergedRegion != null && Util.isNewMergedRegion(mergedRegion, allMergedRegions)) {
 			CellRangeAddress newMergedRegion = new CellRangeAddress(mergedRegion.getFirstRow(),
 					mergedRegion.getLastRow(), mergedRegion.getFirstColumn() + destCellNum - cellNum,
 					mergedRegion.getLastColumn() + destCellNum - cellNum);
-			if (Util.isNewMergedRegion(newMergedRegion, mergedRegions)) {
-				mergedRegions.add(newMergedRegion);
+			if (Util.isNewMergedRegion(newMergedRegion, allMergedRegions)) {
+				allMergedRegions.add(new MergedRegionElement(newMergedRegion));
 				sheet.addMergedRegion(newMergedRegion);
 				if (removeSourceMergedRegion) {
 					removeMergedRegion(sheet, mergedRegion);
@@ -823,7 +864,7 @@ public final class Util {
 
 	public static void shiftCellsLeft(Sheet sheet, int startRow, int startCol, int endRow, int endCol, int shiftNumber,
 			boolean removeSourceMergedRegion) {
-		Set mergedRegions = new HashSet();
+		SortedMergedRegions allMergedRegions = new SortedMergedRegions();
 		for (int rowNum = startRow; rowNum <= endRow; rowNum++) {
 			boolean doSetWidth = true;
 			org.apache.poi.ss.usermodel.Row row = sheet.getRow(rowNum);
@@ -840,7 +881,7 @@ public final class Util {
 						destCell = row.createCell(destColNum);
 					}
 					copyCell(cell, destCell, true);
-					Util.updateMergedRegionInRow(sheet, mergedRegions, rowNum, colNum, destColNum,
+					Util.updateMergedRegionInRow(sheet, allMergedRegions, rowNum, colNum, destColNum,
 							removeSourceMergedRegion);
 					if (doSetWidth) {
 						sheet.setColumnWidth(destCell.getColumnIndex(), getWidth(sheet, cell.getColumnIndex()));
@@ -864,7 +905,7 @@ public final class Util {
 
 	public static void shiftCellsRight(Sheet sheet, int startRow, int endRow, int startCol, int shiftNumber,
 			boolean removeSourceMergedRegion) {
-		Set mergedRegions = new HashSet();
+		SortedMergedRegions allMergedRegions = new SortedMergedRegions();
 		for (int rowNum = startRow; rowNum <= endRow; rowNum++) {
 			org.apache.poi.ss.usermodel.Row row = sheet.getRow(rowNum);
 			if (row != null) {
@@ -880,7 +921,7 @@ public final class Util {
 						cell = row.createCell(colNum);
 					}
 					copyCell(cell, destCell, true);
-					Util.updateMergedRegionInRow(sheet, mergedRegions, rowNum, colNum, destColNum,
+					Util.updateMergedRegionInRow(sheet, allMergedRegions, rowNum, colNum, destColNum,
 							removeSourceMergedRegion);
 					// Folowing 2 lines Added by kiransringeri@gmail.com
 					// Clear cell contents

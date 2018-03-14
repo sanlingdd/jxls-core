@@ -1,6 +1,9 @@
 package net.sf.jxls.util;
 
-import net.sf.jxls.tag.Block;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.poi.ss.usermodel.Cell;
@@ -8,9 +11,8 @@ import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import net.sf.jxls.tag.Block;
+import net.sf.jxls.transformer.SortedMergedRegions;
 
 /**
  * @author Leonid Vysochyn
@@ -24,6 +26,9 @@ public class TagBodyHelper {
             int endRow = Math.max( sheet.getLastRowNum(), sheet.getPhysicalNumberOfRows());
             int numberOfRows = block.getNumberOfRows() * n;
             Util.shiftRows(sheet, startRow, endRow, numberOfRows);
+            
+            SortedMergedRegions allMergedRegions = new SortedMergedRegions();
+            
             for (int i = 0; i < n; i++) {
                 for (int j = 0, c = block.getNumberOfRows(); j < c; j++) {
                     Row row = sheet.getRow(block.getStartRowNum() + j);
@@ -32,7 +37,7 @@ public class TagBodyHelper {
                         if (newRow == null) {
                             newRow = sheet.createRow(block.getEndRowNum() + block.getNumberOfRows() * i + 1 + j);
                         }
-                        Util.copyRow(sheet, row, newRow);
+                        Util.copyRow(sheet, row, newRow,allMergedRegions);
                     }
                 }
             }
@@ -44,6 +49,8 @@ public class TagBodyHelper {
     public static int duplicateDown(Sheet sheet, Block block, int n, Map formulaCellsToUpdate) {
         if (n > 0) {
             Util.shiftRows(sheet, block.getEndRowNum() + 1, sheet.getLastRowNum(), block.getNumberOfRows() * n);
+            SortedMergedRegions allMergedRegions = new SortedMergedRegions();
+
             for (int i = 0; i < n; i++) {
                 for (int j = 0, c = block.getNumberOfRows(); j < c; j++) {
                     Row row = sheet.getRow(block.getStartRowNum() + j);
@@ -52,7 +59,7 @@ public class TagBodyHelper {
                         if (newRow == null) {
                             newRow = sheet.createRow(block.getEndRowNum() + block.getNumberOfRows() * i + 1 + j);
                         }
-                        Util.copyRow(sheet, row, newRow);
+                        Util.copyRow(sheet, row, newRow,allMergedRegions);
                     }
                 }
             }
@@ -63,7 +70,7 @@ public class TagBodyHelper {
 
     public static int duplicateRight(Sheet sheet, Block block, int n) {
         if (n > 0) {
-            Set mergedRegions = new HashSet();
+            SortedMergedRegions allMergedRegions = new SortedMergedRegions();
             Util.shiftCellsRight(sheet, block.getStartRowNum(), block.getEndRowNum(),  (block.getEndCellNum() + 1),  (block.getNumberOfColumns() * n), true);
             for (int rowNum = block.getStartRowNum(), c = block.getEndRowNum(); rowNum <= c; rowNum++) {
                 Row row = sheet.getRow(rowNum);
@@ -77,7 +84,7 @@ public class TagBodyHelper {
                                 destCell = row.createCell(destCellNum);
                             }
                             Util.copyCell(cell, destCell, true);
-                            Util.updateMergedRegionInRow(sheet, mergedRegions, rowNum, cellNum, destCellNum, false);
+                            Util.updateMergedRegionInRow(sheet, allMergedRegions, rowNum, cellNum, destCellNum, false);
                             sheet.setColumnWidth(destCellNum, Util.getWidth(sheet, cellNum));
                         }
                     }
